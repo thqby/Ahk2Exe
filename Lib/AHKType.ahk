@@ -33,6 +33,7 @@ AHKType(exeName, Unicode:=1)
 		; Get IsUnicode based on the presence of a string matching our encoding
 		Type.IsUnicode := (!RegExMatch(exeData, "MsgBox\0") = !A_IsUnicode) ? 1 : ""
 		Type.Summary := Type.PtrSize=8 ? "U64" : Type.IsUnicode ? "U32" : "A32"
+		Type.H := !!RegExMatch(exeData, "ZipRawMemory\0")
 	}
 	if !(VersionInfoSize := DllCall("version\GetFileVersionInfoSize"
 		, "str", exeName, "uint*", null, "uint"))
@@ -55,6 +56,6 @@ AHKType(exeName, Unicode:=1)
 		if DllCall("version\VerQueryValue", "ptr", &VersionInfo, "str"
 		, "\StringFileInfo\" id "\" A_LoopField, "ptr*", pField, "uint*", cbField)
 			Type[SubStr(A_LoopField,5)] := StrGet(pField, cbField)
-	
+
 	return Type
 }

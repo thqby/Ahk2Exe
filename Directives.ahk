@@ -288,6 +288,9 @@ Directive_AddResource(state, rsrc, resName := "")
 			Util_Error("Error: Impossible BMP file!", 0x66, state.Cmd)
 		pData += 14, fSize -= 14
 	}
+	else if (resType = 10 && UseCompression)
+		if !fSize := ZipRawMemory(pData, fSize, pData)
+			Util_Error("Error: Could not compress the file to: " file, 0x46)
 	if !DllCall("UpdateResource", "ptr",state.Module, typeType,resType, nameType
 	, resName, "ushort",state.resLang, "ptr",pData, "uint",fSize, "uint")
 		Util_Error("Error adding resource:", 0x46, state.Cmd)

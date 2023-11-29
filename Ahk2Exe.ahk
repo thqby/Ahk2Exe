@@ -40,6 +40,7 @@ CompressCode := {-1:2, 0:-1, 1:-1, 2:-1} ; Valid compress codes (-1 => 2)
 global UseAhkPath := "", AhkWorkingDir := A_WorkingDir, StopCDExe, StopCDIco
 	, StopCDBin, SBDMes := "(Use script's 'Base' directives)", CLIMode, DirDoneG
 	, ExeFiles := [], BinFiles := [], BinNames, FileNameG, LastIdG := 1
+	, EncryptCache := {}, CompressionLevel := 5, UseEncrypt := 1, UseCompression, UsePassword, IsAhkH
 
 ExeDfltMes := "(Default is script file, or any relevant compiler directive)"
 
@@ -91,6 +92,7 @@ Menu, MenuBar,  Add, &Help, :HelpMenu
 Gui, Menu, MenuBar
 
 GuiX := 580, GuiY := 355
+GuiY += 95
 
 Gui, +LastFound +Resize +MinSize%GuiX%x%GuiY% ; +MaxSizex%GuiY%
 GuiHwnd := WinExist("")                       ;^ Fails on older Windows versions
@@ -113,8 +115,8 @@ Gui, Add, Edit,   xp140 yp-4 w291 h23 ReadOnly vExeFile1
 		, % Exefile ? ExeFile : ExeDfltMes
 Gui, Add, Button, xp296 yp w53 h23 gBrowseExe vBtnExeFile, B&rowse
 Gui, Add, Button,  xp58 yp w53 h23 gDefaultExe vBtnExeDefault, D&efault
-Gui, Add, GroupBox, x11 yp45 w556 h105 cGreen vGroupB, Options
-Gui, Add, Text,     x17 yp20, Custom &Icon (.ico file)
+Gui, Add, GroupBox, x11 yp45 w556 h195 cGreen vGroupB, Options
+Gui, Add, Text,     x17 yp20, Custom &Icon(.ico file)
 Gui, Add, Edit,   xp140 yp-4 w291 h23 ReadOnly vIcoFile, %IcoFile%
 Gui, Add, Button, xp296 yp w53 h23 gBrowseIco vBtnIcoFile, Br&owse
 Gui, Add, Button,  xp58 yp w53 h23 gDefaultIco vBtnIcoDefault, Def&ault
@@ -125,6 +127,13 @@ Gui, Add, Text,     x17 yp32, Compress exe with
 Gui, Add, DDL, % "xp140 yp-2 w75 AltSubmit gCompress vUseMPress Choose" UseMPRESS+1, (none)|MPRESS|UPX
 Gui, Add, Text,   xp150 yp2 vEmbRes, Embedded Resource ID
 gui, Add, ComboBox,x444 yp-2 w112 vResourceID, %LastResource%
+Gui, Add, Text,     x17 yp32, Encrypt Password
+Gui, Add, Edit,   xp140 yp-4 w291 h23 vUsePassword Password, AutoHotkey
+Gui, Add, Text,     x17 yp34, Encrypt Source
+Gui, Add, DDL,    xp140 yp-2 w75 AltSubmit vUseEncrypt Choose%UseEncrypt%, (none)|Full Text|Each Line
+Gui, Add, Text,   xp150 yp2 vTCL, Compression Level
+Gui, Add, DDL,    xp140 yp-2 w112 vCompressionLevel, 0|1|2|3|4|5||6|7|8|9
+Gui, Add, CheckBox, x17 yp28 h23 vUseCompression, Use zip compress other RCDATA resources except source code
 Gui, Add, Text,     x17 yp40, Convert to executable
 Gui, Font, bold
 Gui, Add, Button, xp140 yp-4 w75 h23 Default gConvert vBtnConvert, &Convert
@@ -162,6 +171,17 @@ BinChanged:
 Gui Submit, NoHide
 GuiControl % SubStr(BinFiles[BinFileId],-3)=".bin"?"Disable":"Enable",EmbRes
 GuiControl % SubStr(BinFiles[BinFileId],-3)=".bin"?"Disable":"Enable",ResourceID
+if (IsAhkH := SubStr(StrSplit(BinNames, "|")[BinFileId], 1, 2) = "v2" && AHKType(BinFiles[BinFileId]).H) {
+	GuiControl Enable, CompressionLevel
+	GuiControl Enable, UseEncrypt
+	GuiControl Enable, UsePassword
+	GuiControl Enable, UseCompression
+} else {
+	GuiControl Disable, CompressionLevel
+	GuiControl Disable, UseEncrypt
+	GuiControl Disable, UsePassword
+	GuiControl Disable, UseCompression
+}
 return
 
 GuiDropFiles:
@@ -235,6 +255,9 @@ GuiControl, Move,     BinFileId,     % "w" A_GuiWidth-299
 GuiControl, Move,     EmbRes,        % "x" A_GuiWidth-290
 GuiControl, MoveDraw, ResourceID,    % "x" A_GuiWidth-135
 GuiControl, MoveDraw, GroupB,        % "w" A_GuiWidth-24
+GuiControl, Move,     TCL,           % "x" A_GuiWidth-290
+GuiControl, Move,CompressionLevel,   % "x" A_GuiWidth-135
+GuiControl, Move,     UsePassword,   % "w" A_GuiWidth-299
 
 ; Footer
 GuiControl, MoveDraw, Save,          % "x" A_GuiWidth-290
@@ -298,18 +321,23 @@ FindBinsExes(File, Excl="AutoHotkeySC.bin|Ahk2Exe.exe", Mode="R",Phase="",Dup=0)
 		ToolTip Ahk2Exe:`n%Phase% Working %Phase%
 	Count := 0
 	Loop Files, %File%, %Mode%
-	{	if !(A_LoopFileName~="i)\.bin$|^AutoHotkey.+\.exe$|^Ahk2Exe.exe$")
+	{	if !(A_LoopFileName~="i)\.bin$|^AutoHotkey.+\.(exe|dll)$|^Ahk2Exe.exe$")
 		|| A_LoopFileName~="i)^(" Excl ")$|_UIA.exe$"
 			continue
 		Type := AHKType(A_LoopFileLongPath)   ; Get Unicode data and stats
 		if (Type.era = "Modern") && (A_LoopFileExt = "bin"
-		|| (A_LoopFileExt = "exe" && InStr(Type.Description,"AutoHotkey")))
+		|| InStr(Type.Description,"AutoHotkey"))
 		{	if (A_LoopFileExt = "exe")
 			{	if !(ExeFiles[Type.Version Type.Summary]) ; Keep only first of a version
 					ExeFiles[Type.Version Type.Summary] := A_LoopFileLongPath
 				wk := StrSplit(Type.Version,[".","-"]), Count++
 				if !(wk.1 = 1 &&  wk.2 = 1 && wk.3 >= 34 ; See GitHub issue #98
 				||   wk.1 = 2 && (wk.2 > 0 || wk.3 = wk.3+0 || wk.3 >= "a135"))
+					continue
+			}
+			else if (A_LoopFileExt = "dll")
+			{	if !ExeFiles[Type.Version Type.Summary]
+				&& FindBinsExes(SubStr(A_LoopFileLongPath, 1, -3) "exe", "\|", "") < 2
 					continue
 			} Count+=2
 			if (!Dup        ; Skip duplicate Base files by default
@@ -330,9 +358,11 @@ AddBin(File, Force := 0)
 		Type := AHKType(File), BinFiles.Push(File), BinNames .= "|v"
 		. Type.Version " " Type.Summary " " RegExReplace(File, "^.+\\")
 	}
+	BinNames := LTrim(BinNames, "|")
 	GuiControl,,       BinFileId, |%BinNames% 
 	GuiControl Choose, BinFileId, % BinFiles.MaxIndex()
 	Util_Status("""" File """ added to 'Base file' list.")
+	SetTimer BinChanged, -20
 }		
 
 ParseCmdLine:
@@ -428,8 +458,8 @@ CmdArg_Silent(){
 		p.RemoveAt(1)
 	} else	SilentMode := 1
 }
-CmdArg_Pass() {
-	BadParams("Error: Password protection is not supported.", 0x24)
+CmdArg_Pass(p2) {
+	global UsePassword := p2, UseEncrypt := 3
 }
 CmdArg_NoDecompile() {
 	BadParams("Error: /NoDecompile is not supported.", 0x23)
@@ -470,7 +500,7 @@ return
 
 BrowseBin:
 Gui, +OwnDialogs
-FileSelectFile, ov, 1, %LastBinDir%, Open Base File, Base files (*.bin;*.exe)
+FileSelectFile, ov, 1, %LastBinDir%, Open Base File, Base files (*.bin;*.exe;*.dll)
 if ErrorLevel
 	return
 SplitPath ov,, LastBinDir
@@ -647,6 +677,7 @@ ConvertCLI()
 		Util_Info("Successfully compiled as:`n" RTrim(ExeFileL,",`n"))
 	else
 		FileAppend,% "Successfully compiled as:`n" RTrim(ExeFileL,",`n") "`n", *
+	ahkv2server()
 }
 
 LoadSettings:

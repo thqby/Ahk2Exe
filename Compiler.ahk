@@ -12,7 +12,8 @@ AhkCompile(AhkFile, ExeFile, ResourceID, CustomIcon, BinFile, UseMPRESS, fileCP)
 	tempWD := new CTempWD(AhkWorkingDir)   ; Original Ahk2Exe starting directory
 	SplitPath AhkFile,, Ahk_Dir,, Ahk_Name
 	SplitPath ExeFile,, Edir,,    Ename
-	ExeFile := (Edir ? Edir : Ahk_Dir) "\" (xe:= Ename ? Ename : Ahk_Name ) ".exe"
+	SplitPath BinFile,,, OutExt
+	ExeFile := (Edir ? Edir : Ahk_Dir) "\" (xe:= Ename ? Ename : Ahk_Name ) "." (OutExt ? OutExt : "exe")
 	ExeFile := Util_GetFullPath(ExeFile)
 	if (CustomIcon != "")
 	{	SplitPath CustomIcon,, Idir,, Iname
@@ -53,6 +54,8 @@ AhkCompile(AhkFile, ExeFile, ResourceID, CustomIcon, BinFile, UseMPRESS, fileCP)
 	DerefIncludeVars.A_PtrSize    := BinType.PtrSize
 	DerefIncludeVars.A_IsUnicode  := BinType.IsUnicode
 	DerefIncludeVars.A_BasePath   := BinFile
+	if (!BinType.H)
+		UseEncrypt := 1, UseCompression := 0
 
 	global AhkPath := UseAhkPath         ; = any /ahk parameter
 	
@@ -69,11 +72,12 @@ AhkCompile(AhkFile, ExeFile, ResourceID, CustomIcon, BinFile, UseMPRESS, fileCP)
 	IfNotExist, %AhkPath%
 		Util_Error("Warning: AutoHotkey could not be located!`n`nAuto-includes "
 . "from Function Libraries and any 'Obey' directives will not be processed.",0)
-
+	else if (UseEncrypt > 1 || UseCompression)
+		ahkv2server(AhkPath)
 	global StdLibDir := Util_GetFullPath(AhkPath "\..\Lib")
 
 	; v1.1.34 supports compiling with EXE, but in that case uses resource ID 1.
-	ResourceID := SubStr(BinFile, -3)=".exe" ? ResourceID ? ResourceID : "#1" 
+	ResourceID := SubStr(BinFile, -3)!=".bin" ? ResourceID ? ResourceID : "#1" 
 	: ">AUTOHOTKEY SCRIPT<"
 
 	if (BinType.Description ~= "^AutoHotkey"  ; If an AutoHotkey .exe Base used,
@@ -144,7 +148,13 @@ BundleAhkScript(ExeFile, ResourceID, AhkFile, UseMPRESS, IcoFile
 
 	VarSetCapacity(BinScriptBody, BinScriptBody_Len:=StrPut(ScriptBody,"UTF-8")-1)
 	StrPut(ScriptBody, &BinScriptBody, "UTF-8")
-	
+	pBinScriptBody := &BinScriptBody
+	if (UseEncrypt > 1 && UsePassword != "") {
+		Util_Status("Encrypting: Master Script")
+		if !(BinScriptBody_Len := ZipRawMemory(pBinScriptBody, BinScriptBody_Len, pBinScriptBody, UseEncrypt - 1))
+			goto _FailEnd
+	}
+
 	Module := DllCall("BeginUpdateResource", "str", ExeFile, "uint", 0, "ptr")
 	if !Module
 		Util_Error("Error: Error opening the destination file. (C1)", 0x31)
@@ -172,7 +182,7 @@ BundleAhkScript(ExeFile, ResourceID, AhkFile, UseMPRESS, IcoFile
 
 	if !DllCall("UpdateResource", "ptr", Module, "ptr", 10
 			, "ptr", ResourceID ~= "^#\d+$" ? SubStr(ResourceID, 2) : &ResourceID
-			, "ushort",0x409, "ptr",&BinScriptBody, "uint",BinScriptBody_Len, "uint")
+			, "ushort",0x409, "ptr",pBinScriptBody, "uint",BinScriptBody_Len, "uint")
 		goto _FailEnd
 		
 	gosub _EndUpdateResource
@@ -254,4 +264,76 @@ Util_GetFullPath(path)
 	VarSetCapacity(fullpath, size << !!A_IsUnicode)
 	fullpathR := DllCall("GetFullPathName", "str", path, "uint", size, "str", fullpath, "ptr", 0, "uint") ? fullpath : ""
 	return fullpathR
+}
+
+ahkv2server(BinFile := "") {
+	global ahkv2_pid
+	static wshexec := 0, _ := OnMessage(0x4A, "WM_COPYDATA")
+	static code_v2 := "
+	(`
+		#NoTrayIcon
+		A_Args:=['{}',{}]
+		if IsSet(A_ZipCompressionLevel)
+			A_ZipCompressionLevel:=A_Args.Pop(),args2:=[]
+		else args2:=[,A_Args[2]]
+		OnMessage(0x4A, WM_COPYDATA),FileAppend(A_ScriptHwnd '`n','*'),SetTimer(exit_timeout,-15000)
+		exit_timeout()=>ExitApp()
+		WM_COPYDATA(wParam,lParam,msg,hwnd) {
+			SetTimer(exit_timeout,0),dwData:=NumGet(lParam,'ptr'),size:=NumGet(lParam,A_PtrSize,'uint'),data:=NumGet(lParam,2*A_PtrSize,'ptr')
+			if (buf:=dwData=0?ZipRawMemory(data,size,args2*):dwData=1?ZipRawMemory(data,size,A_Args*):encrypt2(data,size)) {
+				s:=Buffer(24),NumPut('ptr',buf.size,'ptr',buf.ptr,s,A_PtrSize)
+				DllCall('SendMessage','ptr',wParam,'uint',0x4A,'ptr',0,'ptr',s)
+				SetTimer(exit_timeout,-5000)
+				return true
+			}
+			return false
+		}
+		encrypt2(data,size) {
+			ScriptBody:=StrGet(data,size,'utf-8'),buf:=Buffer(bufsize:=size*2),sz:=0
+			loop parse ScriptBody,'`n','`r'{
+				if A_LoopField=''{
+					if 10+cryptedsz>=bufsize
+						buf.size:=bufsize*=2
+					NumPut('char',10,buf,sz++)
+					continue
+				}
+				StrPut(A_LoopField,data:=Buffer(StrPut(A_LoopField,'utf-8')),'utf-8'),zip:=ZipRawMemory(data,A_Args*)
+				DllCall('crypt32\CryptBinaryToStringA','ptr',zip,'uint',z:=zip.size,'uint',0x40000001,'ptr',0,'uint*',&cryptedsz:=0)
+				if sz+cryptedsz>=bufsize
+					buf.size:=bufsize*=2
+				DllCall('crypt32\CryptBinaryToStringA','ptr',zip,'uint',z,'uint',0x40000001,'ptr',buf.Ptr+sz,'uint*',cryptedsz)
+				NumPut('char',10,buf,(sz+=cryptedsz)-1)
+			}
+			NumPut('char',0,'char',0,buf,sz-1)
+			return ZipRawMemory(buf.ptr,sz,A_Args*)
+		}
+	)"
+	if (wshexec && wshexec.Status = 0)
+		wshexec.Terminate()
+	if (BinFile) {
+		wshexec := ComObjCreate("WScript.Shell").Exec("""" BinFile """ /script /cp0 *")
+		wshexec.StdIn.Write(Format(code_v2, StrReplace(UsePassword,"'","``'"), CompressionLevel))
+		wshexec.StdIn.Close()
+		return ahkv2_pid := wshexec.ProcessID
+	}
+	wshexec := 0
+}
+
+WM_COPYDATA(wParam, lParam, msg, hwnd) {
+	EncryptCache.SetCapacity("", sz := NumGet(lParam + A_PtrSize, "uint"))
+	DllCall("RtlMoveMemory", "ptr", EncryptCache.GetAddress(""), "ptr", NumGet(lParam + 2*A_PtrSize, "ptr"), "uint", sz)
+	return true
+}
+
+ZipRawMemory(data, size, ByRef outptr, level := 0) {
+	global ahkv2_pid
+	DetectHiddenWindows on
+	VarSetCapacity(buf, 24, 0), EncryptCache.SetCapacity("", 0)
+	if (level)
+		NumPut(level, &buf, "ptr")
+	NumPut(size, &buf, A_PtrSize, "uint"), NumPut(data, &buf, A_PtrSize*2, "ptr")
+	DllCall("SendMessage", "ptr", WinExist("ahk_class AutoHotkey ahk_pid " ahkv2_pid)
+		, "uint", 0x4A, "ptr", A_ScriptHwnd, "ptr", &buf, "ptr")
+	outptr := EncryptCache.GetAddress("")
+	return EncryptCache.GetCapacity("")
 }
