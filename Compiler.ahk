@@ -7,7 +7,7 @@
 
 AhkCompile(AhkFile, ExeFile, ResourceID, CustomIcon, BinFile, UseMPRESS, fileCP)
 {
-	global ExeFileTmp, ExeFileG, SilentMode
+	global ExeFileTmp, ExeFileG, SilentMode, MjrVn
 
 	tempWD := new CTempWD(AhkWorkingDir)   ; Original Ahk2Exe starting directory
 	SplitPath AhkFile,, Ahk_Dir,, Ahk_Name
@@ -20,9 +20,6 @@ AhkCompile(AhkFile, ExeFile, ResourceID, CustomIcon, BinFile, UseMPRESS, fileCP)
 		CustomIcon := (Idir ? Idir : Ahk_Dir) "\" (Iname ? Iname : Ahk_Name ) ".ico"
 		CustomIcon := Util_GetFullPath(CustomIcon)
 	}
-	; Get temp file name. Remove any invalid "path/" from exe name (/ should be \)
-	ExeFileTmp := Util_TempFile(, "exe~", RegExReplace(xe,"^.*/"))
-	
 	if BinFile =
 	{	BinFile = %A_ScriptDir%\AutoHotkeySC.bin
 		IfNotExist %BinFile%
@@ -36,10 +33,12 @@ AhkCompile(AhkFile, ExeFile, ResourceID, CustomIcon, BinFile, UseMPRESS, fileCP)
 		Util_Error("Error: The selected Base file does not exist. (C1)"
 		, 0x34, """" BinFile """")
 	
-	try FileCopy, %BinFile%, %ExeFileTmp%, 1
-	catch
-		Util_Error("Error: Unable to copy Base file to destination."
-		, 0x41, """" ExeFileTmp """")
+	; Get temp file name. Remove any invalid "path/" from exe name (/ should be \)
+	ExeFileTmp := Util_TempFile(, "exe~", RegExReplace(xe,"^.*/"))
+	FileCopy, %BinFile%, %ExeFileTmp%, 1
+	if (A_LastError)
+		Util_Error("Error: Unable to copy Base file to destination. (C1)"
+		, 0x41, """" ExeFileTmp """", "Error = " A_LastError)
 
 	DerefIncludeVars.Delete("U_", "V_")         ; Clear Directives entries
 	DerefIncludeVars.Delete("A_WorkFileName")
@@ -49,7 +48,10 @@ AhkCompile(AhkFile, ExeFile, ResourceID, CustomIcon, BinFile, UseMPRESS, fileCP)
 	if AhkFile~="i)\\Ahk2Exe.ahk$" &&(BinType.Summary!="U32" ||BinFile~="i).bin$")
 		Util_Error("Ahk2Exe must be compiled with a Unicode 32-bit .exe Base file."
 		, 0x2)
+	if AhkFile~="i)\\Ahk2Exe.ahk$" && UseMPRESS ; Don't compress Ahk2Exe
+		Util_Error("Ahk2Exe must not be compressed when compiled.", 0x2)
 
+	MjrVn := SubStr(BinType.Version,1,1)
 	DerefIncludeVars.A_AhkVersion := BinType.Version
 	DerefIncludeVars.A_PtrSize    := BinType.PtrSize
 	DerefIncludeVars.A_IsUnicode  := BinType.IsUnicode
@@ -58,7 +60,6 @@ AhkCompile(AhkFile, ExeFile, ResourceID, CustomIcon, BinFile, UseMPRESS, fileCP)
 		UseEncrypt := 1, UseCompression := 0
 
 	global AhkPath := UseAhkPath         ; = any /ahk parameter
-	
 	; V2 alphas and betas expected to match as breaking changes between versions
 	if (AhkPath = "") ; Later v2 versions will have base as .exe, so should match
 		if !(AhkPath := ExeFiles[BinType.Version BinType.Summary]) ; .exe vs base?
@@ -125,7 +126,7 @@ AhkCompile(AhkFile, ExeFile, ResourceID, CustomIcon, BinFile, UseMPRESS, fileCP)
 					Reload := 1
 	}	}	}
 	if Reload
-		run "%ExeFileG%", %ExeFileG%\..
+		Run "%ExeFileG%", %ExeFileG%\..
 	Util_HideHourglass()
 	Util_Status("")
 	return ExeFileG
@@ -134,10 +135,10 @@ AhkCompile(AhkFile, ExeFile, ResourceID, CustomIcon, BinFile, UseMPRESS, fileCP)
 
 BundleAhkScript(ExeFile, ResourceID, AhkFile, UseMPRESS, IcoFile
 	, fileCP, BinFile, VerInfo)
-{
+{	global MjrVn
 	if fileCP is space
-		if SubStr(DerefIncludeVars.A_AhkVersion,1,1) = 2
-			fileCP := "UTF-8"           ; Default for v2 is UTF-8
+		if (MjrVn != 1)
+			fileCP := "UTF-8"            ; Default for v2+ is UTF-8
 		else fileCP := A_FileEncoding
 	
 	try FileEncoding, %fileCP%

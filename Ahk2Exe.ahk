@@ -8,7 +8,7 @@
 ;
 ; Must be compiled with itself (same version)
 ;
-; @Ahk2Exe-Base           AutoHotkeyU32.exe      ; Commented out; advisory only
+; @Ahk2Exe-Base           ..\AutoHotkeyU32.exe   ; Commented out; advisory only
 ;@Ahk2Exe-SetName         Ahk2Exe
 ;@Ahk2Exe-SetDescription  AutoHotkey Script Compiler
 ;@Ahk2Exe-SetCopyright    Copyright (c) since 2004
@@ -21,7 +21,6 @@ SetBatchLines -1
 #NoEnv
 #NoTrayIcon
 #SingleInstance Off
-
 #Include %A_ScriptDir%
 #Include Compiler.ahk
 #Include Update.ahk
@@ -34,15 +33,12 @@ SetBatchLines -1
 Ver := A_IsCompiled ? AHKType(A_ScriptFullPath,0).Version : A_AhkVersion SubVer
 
 OnExit("Util_HideHourglass"), OnExit("UpdDirRem")
-
 CompressCode := {-1:2, 0:-1, 1:-1, 2:-1} ; Valid compress codes (-1 => 2)
-
 global UseAhkPath := "", AhkWorkingDir := A_WorkingDir, StopCDExe, StopCDIco
 	, StopCDBin, SBDMes := "(Use script's 'Base' directives)", CLIMode, DirDoneG
 	, ExeFiles := [], BinFiles := [], BinNames, FileNameG, LastIdG := 1
+	, Store := A_ScriptDir "\" ~= "i)^.:\\Program Files\\WindowsApps\\"
 	, EncryptCache := {}, CompressionLevel := 5, UseEncrypt := 1, UseCompression, UsePassword, IsAhkH
-
-ExeDfltMes := "(Default is script file, or any relevant compiler directive)"
 
 ; Set default codepage from any installed AHK
 ScriptFileCP := A_FileEncoding
@@ -65,11 +61,10 @@ if (BinFiles.1 = SBDMes && !StopCDBin)
 	BinFileId := 1, LastIdG := FindBinFile(LastBinFile) - 1
 else BinFileId := FindBinFile(LastBinFile)
 
+ExeDfltMes := "(Default is script file, or any relevant compiler directive)"
 AllowMes0 := "A&llow Gui Shrinkage`tAlt+L"
 AllowMes1 := "Disa&llow Gui Shrinkage`tAlt+L"
 SaveMes   := "S&ave Script Settings As…`tCtrl+S"
-
-Help0 := Func("Help").Bind(0,"Ahk2Exe", "Scripts.htm#ahk2exe") ; Help topics
 
 Menu, FileMenu, Add, %AllowMes0%, Shrink
 Menu, FileMenu, Add, R&eset all Fields`tF5, Restart
@@ -82,7 +77,9 @@ Menu, FileMenu, Add, &Convert`tAlt+C, Convert
 Menu, FileMenu, Add
 Menu, FileMenu, Add, E&xit`tAlt+F4, GuiClose
 Menu, HelpMenu, Add, &Help`tF1, % Help0
-Menu, HelpMenu, Add, Check for Updates...`tAlt+K, Update
+RunWait "%ComSpec%" /c echo 1,,UseErrorLevel Hide 
+if !(ErrorLevel && Store && ComSpec) ;No update if Store S mode & ComSpec exists
+	Menu, HelpMenu, Add, Check for Updates...`tAlt+K, Update
 Menu, HelpMenu, Add
 Menu, HelpMenu, Add, &About, About
 Menu, MenuBar,  Add, &File, :FileMenu
@@ -162,7 +159,7 @@ ExitApp
 compress:
 gui, Submit, NoHide
 if (UseMPRESS !=1
- && !FileExist(wk := A_ScriptDir "\" . {2:"MPRESS.exe",3:"UPX.exe"}[UseMPRESS]))
+ && !FileExist(A_ScriptDir "\" (wk := {2:"MPRESS.exe",3:"UPX.exe"}[UseMPRESS])))
 Util_Status("Warning: """ wk """ not found. See 'Help' -> 'Check for Updates'.")
 else Util_Status("Ready")
 return
@@ -321,8 +318,8 @@ FindBinsExes(File, Excl="AutoHotkeySC.bin|Ahk2Exe.exe", Mode="R",Phase="",Dup=0)
 		ToolTip Ahk2Exe:`n%Phase% Working %Phase%
 	Count := 0
 	Loop Files, %File%, %Mode%
-	{	if !(A_LoopFileName~="i)\.bin$|^AutoHotkey.+\.(exe|dll)$|^Ahk2Exe.exe$")
-		|| A_LoopFileName~="i)^(" Excl ")$|_UIA.exe$"
+	{	if !(A_LoopFileName~="i)\.bin$|^AutoHotkey.+\.(exe|dll)$|^Ahk2Exe\.exe$")
+		|| A_LoopFileName~="i)^(" Excl ")$|_UIA\.exe$|V[12]\.exe$"
 			continue
 		Type := AHKType(A_LoopFileLongPath)   ; Get Unicode data and stats
 		if (Type.era = "Modern") && (A_LoopFileExt = "bin"
@@ -368,56 +365,57 @@ AddBin(File, Force := 0)
 ParseCmdLine:
 if !A_Args.MaxIndex()
 	return
-CLIMode := true           ; Set defaults - may be overridden.
+BadP := [], CLIMode := 1  ; Set defaults
 SilentMode := 0           ; 0=off, 1=on, 2=verbose
 p := A_Args.Clone()       ; Don't deplete A_Args here as needed in 'Restart:'
 while p.MaxIndex()
 {	p1 := p.RemoveAt(1)
 	if SubStr(p1,1,1) != "/" || !(p1fn := Func("CmdArg_" SubStr(p1,2)))
-		BadParams("Error: Unrecognised parameter:`n" p1)
+		BadP.Push(["Error: Unrecognised parameter:`n" p1])
 	if p1fn.MaxParams       ; Currently assumes 0 or 1 params.
 	{	p2 := p.RemoveAt(1)
 		if (p2 = "" || SubStr(p2,1,1) = "/")
-			BadParams("Error: Blank or missing parameter for " p1 ".")
+			BadP.Push(["Error: Blank or missing parameter for " p1 "."])
 	}
 	%p1fn%(p2)
 }
+if BadP.MaxIndex()
+	BadParams(BadP.1.1, BadP.1.2 ? BadP.1.2 : 0x3, BadP.1.3, SilentMode)
 if (SilentMode && (!CLIMode || GuiParam))
-	BadParams("Error: /Silent parameter requires CLI mode.")
-CLIMode := !GuiParam
+	BadParams("Error: /Silent parameter requires CLI mode.",,, SilentMode)
 if (AhkFile = "" && CLIMode)
-	BadParams("Error: No input file specified.")
+	BadParams("Error: No input file specified.",,, SilentMode)
+CLIMode := !GuiParam
 if BinFile =
 	BinFile := LastBinFile
 return
 
-BadParams(Message, ErrorCode := 0x3, Specifically := "")
-{ global SilentMode := 0  ; Errors should go to screen
-	Util_Error(Message, ErrorCode,Specifically, "Command Line Parameters:`n`n" A_ScriptName "`n`t [/in infile.ahk]`n`t [/out outfile.exe]`n`t [/icon iconfile.ico]`n`t [/base AutoHotkeySC.bin]`n`t [/resourceid #1]`n`t [/compress 0 (none), 1 (MPRESS), or 2 (UPX)]`n`t [/cp codepage]`n`t [/silent [verbose]]`n`t [/gui]")
+BadParams(Message, ErrorCode := 0x3, Specifically := "", SilentMode := "")
+{ Util_Error(Message, ErrorCode, Specifically, SilentMode ? "" : "Command Line Parameters:`n`n" A_ScriptName "`n`t [/in infile.ahk]`n`t [/out outfile.exe]`n`t [/icon iconfile.ico]`n`t [/base AutoHotkeySC.bin]`n`t [/resourceid #1]`n`t [/compress 0 (none), 1 (MPRESS), or 2 (UPX)]`n`t [/cp codepage]`n`t [/silent [verbose]]`n`t [/gui]")
 }
 
 CmdArg_Gui() {
 	global GuiParam := true
 }
 CmdArg_In(p2) {
-	global AhkFile := p2
+	global AhkFile := p2, BadP
 	if !FileExist(p2)
-		BadParams("Error: Source file does not exist.",0x32,"""" p2 """")
-	SetCDBin(AhkFile)
+		BadP.Push(["Error: Source file does not exist.",0x32,"""" p2 """"])
+	else SetCDBin(AhkFile)
 }
 CmdArg_Out(p2) {
 	global StopCDExe := 1, ExeFile := p2
 }
 CmdArg_Icon(p2) {
-	global StopCDIco := 1, IcoFile := p2
+	global StopCDIco := 1, IcoFile := p2, BadP
 	if !FileExist(p2)
-		BadParams("Error: Icon file does not exist.",0x35,"""" p2 """")
+		BadP.Push(["Error: Icon file does not exist.",0x35,"""" p2 """"])
 }
 CmdArg_Base(p2) {
-	global StopCDBin := 1, BinFile := p2, LastBinFile := Util_GetFullPath(p2), p1
+	global StopCDBin:=1, BinFile:=p2, LastBinFile:=Util_GetFullPath(p2), p1, BadP
 	if !FileExist(p2)
-		BadParams("Error: Base file does not exist.",0x34,"""" p2 """")
-	AddBin(p2, 1)
+		BadP.Push(["Error: " p1 " file does not exist.",0x34,"""" p2 """"])
+	else AddBin(p2, 1)
 }
 CmdArg_Bin(p2) {
 	CmdArg_Base(p2)
@@ -432,16 +430,15 @@ CmdArg_MPRESS(p2) {
 CmdArg_Compress(p2) {
 	global
 	if !CompressCode[p2]                ; Invalid codes?
-		BadParams("Error: " p1 " parameter invalid:`n" p2)
-	if CompressCode[p2] > 0             ; Convert any old codes
+		BadP.Push(["Error: " p1 " parameter invalid:`n" p2])
+	else if CompressCode[p2] > 0             ; Convert any old codes
 		p2 := CompressCode[p2]
 	UseMPRESS := p2
 }
 CmdArg_Ahk(p2) {
 	global
 	if !FileExist(p2)
-		Util_Error("Error: Specified resource does not exist.", 0x36
-		, "Command line parameter /ahk`n""" p2 """")
+		BadP.Push(["Error: /ahk parameter - file not found.",0x36,"""" p2 """"])
 	UseAhkPath := Util_GetFullPath(p2)
 }
 CmdArg_CP(p2) { ; for example: '/cp 1252' or '/cp UTF-8'
@@ -456,13 +453,10 @@ CmdArg_Silent(){
 	if (p[1] = "verbose")
 	{	SilentMode := 2
 		p.RemoveAt(1)
-	} else	SilentMode := 1
+	} else SilentMode := 1
 }
 CmdArg_Pass(p2) {
 	global UsePassword := p2, UseEncrypt := 3
-}
-CmdArg_NoDecompile() {
-	BadParams("Error: /NoDecompile is not supported.", 0x23)
 }
 
 BrowseAhk:
@@ -794,7 +788,7 @@ Util_Status(s)       ;v Keep early status for GUI
 Util_Error(txt, exitcode, extra := "", extra1 := "", HourGlass := 1)
 {	global CLIMode, ExeFileTmp, SilentMode, AhkFile
 	if extra
-		txt .= "`n`nSpecifically:`n" extra
+		txt .= "`n`nNamely:`n" extra
 	if extra1
 		txt .= "`n`n" extra1
 	Util_HideHourglass()
